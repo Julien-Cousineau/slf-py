@@ -96,7 +96,7 @@ if __name__ == "__main__":
   filename4 = "demo4.slf"
   filename5 = "demo5.slf"
   filename6 = "demo6.slf"
-  createSLF(filename)
+  createEmptySLF(filename)
   # readSLF(filename)
   changeFrame(filename,filename2)
   # addFrames(filename2,filename3)
