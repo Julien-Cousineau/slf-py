@@ -75,8 +75,8 @@ from scipy.spatial import cKDTree
 from matplotlib.tri import Triangulation
 # ~~> dependencies towards other modules
 # ~~> dependencies towards other pytel/modules
-from utils.progressbar import ProgressBar
-from utils.files import getFileContent,putFileContent
+from progressbar import ProgressBar
+from files import getFileContent,putFileContent
 
 # _____                   __________________________________________
 # ____/ Global Variables /_________________________________________/
@@ -430,7 +430,7 @@ class CONLIM:
       core.append("")
       putFileContent(fileName,core)
 
-class SELAFIN:
+class SELAFIN(object):
    """                                 (DOXYGEN parsing)
    Class Selafin
 
