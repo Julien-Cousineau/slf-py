@@ -1,10 +1,10 @@
 from slf import SLF
 import numpy as np
 
-def createSLF(filename):
+def createEmptySLF(filename):
   slf=SLF()
   slf.writeSLF(filename)
-  print("createSLF - NPOIN3:{0}, NELEM3:{1}".format(slf.NPOIN3,slf.NELEM3))
+  slf.printAtt()
 
 def readSLF(filename):
   slf = SLF(filename)
@@ -12,9 +12,7 @@ def readSLF(filename):
   
 def changeValuesV1(input,output):
   slf = SLF(input)
-  print output
-  values =slf.values + 1.0
-  slf.values = values 
+  slf.values = slf.values + 1.0 
   slf.writeSLF(output)
   slf.printAtt()
 
