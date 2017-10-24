@@ -5,7 +5,6 @@ from struct import unpack,pack
 
 class SLF(object):
   def __init__(self,filePath=''):
-    self.empty = True
     self.filePath = filePath
     self._extent = None
     self._trixy = None
@@ -21,6 +20,7 @@ class SLF(object):
     self.file.update({ 'endian': ">" })    # "<" means little-endian, ">" means big-endian
     self.file.update({ 'float': ('f',4) }) #'f' size 4, 'd' = size 8
     if fileName != '':
+       self.empty = False
        self.file.update({ 'hook': open(fileName,'rb') })
        # ~~> checks endian encoding
        self.file['endian'] = self.getEndianFromChar(self.file['hook'],80)
@@ -37,6 +37,7 @@ class SLF(object):
        self.tags = { 'cores':[],'times':[] }
        self.getTimeHistorySLF()
     else:
+       self.empty = True
        self.TITLE = ''
        self.NBV1 = 0; self.NBV2 = 0; self.NVAR = self.NBV1 + self.NBV2
        self.VARINDEX = range(self.NVAR)
@@ -47,6 +48,7 @@ class SLF(object):
        self.NBV2 = 0; self.CLDNAMES = []; self.CLDUNITS = []
        self.IKLE3 = []; self.IKLE2 = []; self.IPOB2 = []; self.IPOB3 = []; self.MESHX = []; self.MESHY = []
        self.tags = { 'cores':[],'times':[] }
+       self.createGrid()
     self.fole = {}
     self.fole.update({ 'name': '' })
     self.fole.update({ 'endian': self.file['endian'] })
@@ -153,11 +155,11 @@ class SLF(object):
     # ~~ Read the x-coordinates of the nodes ~~~~~~~~~~~~~~~~~~
     ftype,fsize = self.file['float']
     f.seek(4,1)
-    self.MESHX = np.asarray( unpack(endian+str(self.NPOIN3)+ftype,f.read(fsize*self.NPOIN3))[0:self.NPOIN2] )
+    self.MESHX = np.asarray( unpack(endian+str(self.NPOIN3)+ftype,f.read(fsize*self.NPOIN3))[0:self.NPOIN2],np.float64)
     f.seek(4,1)
     # ~~ Read the y-coordinates of the nodes ~~~~~~~~~~~~~~~~~~
     f.seek(4,1)
-    self.MESHY = np.asarray( unpack(endian+str(self.NPOIN3)+ftype,f.read(fsize*self.NPOIN3))[0:self.NPOIN2] )
+    self.MESHY = np.asarray( unpack(endian+str(self.NPOIN3)+ftype,f.read(fsize*self.NPOIN3))[0:self.NPOIN2],np.float64)
     f.seek(4,1)
 
   def getTimeHistorySLF(self):
@@ -184,8 +186,7 @@ class SLF(object):
     f = self.file['hook']
     endian = self.file['endian']
     ftype,fsize = self.file['float']
-    if fsize == 4: z = np.zeros((len(varsIndexes),self.NPOIN3),dtype=np.float32)
-    else: z = np.zeros((len(varsIndexes),self.NPOIN3),dtype=np.float64)
+    z = np.zeros((len(varsIndexes),self.NPOIN3),self.dtype)
     # if tags has 31 frames, len(tags)=31 from 0 to 30, then frame should be >= 0 and < len(tags)
     if frame < len(self.tags['cores']) and frame >= 0:
        f.seek(self.tags['cores'][frame])
@@ -194,6 +195,45 @@ class SLF(object):
           f.seek(4,1)
           if ivar in varsIndexes:
              z[varsIndexes.index(ivar)] = unpack(endian+str(self.NPOIN3)+ftype,f.read(fsize*self.NPOIN3))
+          else:
+             f.seek(fsize*self.NPOIN3,1)
+          f.seek(4,1)
+    return z
+
+  def getVALUES( self,t ):
+    VARSOR = self.getVariablesAt( t,self.VARINDEX )
+    for v in self.alterZnames:
+       for iv in range(len(self.VARNAMES)):
+          if v.lower() in self.VARNAMES[iv].lower(): VARSOR[iv] = self.alterZm * VARSOR[iv] + self.alterZp
+       for iv in range(len(self.CLDNAMES)):
+          if v.lower() in self.CLDNAMES[iv].lower(): VARSOR[iv+self.NBV1] = self.alterZm * VARSOR[iv+self.NBV1] + self.alterZp
+    return VARSOR
+  
+  def getSERIES( self,nodes,varsIndexes=[]):
+    f = self.file['hook']
+    endian = self.file['endian']
+    ftype,fsize = self.file['float']
+    if varsIndexes == []: varsIndexes = self.VARINDEX
+    # ~~ Ordering the nodes ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # This assumes that nodes starts at 1
+    onodes = np.sort(np.array( zip(range(len(nodes)),nodes), dtype=[ ('0',int),('1',int) ] ),order='1')
+    # ~~ Extract time profiles ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    z = np.zeros((len(varsIndexes),len(nodes),len(self.tags['cores'])),self.dtype)
+    f.seek(self.tags['cores'][0])
+    for t in range(len(self.tags['cores'])):
+       f.seek(self.tags['cores'][t])
+       f.seek(4+fsize+4,1)
+       for ivar in range(self.NVAR):
+          f.seek(4,1)
+          if ivar in varsIndexes:
+             jnod = onodes[0]
+             f.seek(fsize*(jnod[1]-1),1)
+             z[varsIndexes.index(ivar),jnod[0],t] = unpack(endian+ftype,f.read(fsize))[0]
+             for inod in onodes[1:]:
+                f.seek(fsize*(inod[1]-jnod[1]-1),1)
+                z[varsIndexes.index(ivar),inod[0],t] = unpack(endian+ftype,f.read(fsize))[0]
+                jnod = inod
+             f.seek(fsize*self.NPOIN3-fsize*jnod[1],1)
           else:
              f.seek(fsize*self.NPOIN3,1)
           f.seek(4,1)
@@ -289,48 +329,6 @@ class SLF(object):
        self.appendCoreVarsSLF(self.getVALUES(t))
     self.fole['hook'].close()
 
-  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  #   Tool Box
-  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  def getVALUES( self,t ):
-    VARSOR = self.getVariablesAt( t,self.VARINDEX )
-    for v in self.alterZnames:
-       for iv in range(len(self.VARNAMES)):
-          if v.lower() in self.VARNAMES[iv].lower(): VARSOR[iv] = self.alterZm * VARSOR[iv] + self.alterZp
-       for iv in range(len(self.CLDNAMES)):
-          if v.lower() in self.CLDNAMES[iv].lower(): VARSOR[iv+self.NBV1] = self.alterZm * VARSOR[iv+self.NBV1] + self.alterZp
-    return VARSOR
-  
-  def getSERIES( self,nodes,varsIndexes=[]):
-    f = self.file['hook']
-    endian = self.file['endian']
-    ftype,fsize = self.file['float']
-    if varsIndexes == []: varsIndexes = self.VARINDEX
-    # ~~ Ordering the nodes ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    # This assumes that nodes starts at 1
-    onodes = np.sort(np.array( zip(range(len(nodes)),nodes), dtype=[ ('0',int),('1',int) ] ),order='1')
-    # ~~ Extract time profiles ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    if fsize == 4: z = np.zeros((len(varsIndexes),len(nodes),len(self.tags['cores'])),dtype=np.float32)
-    else: z = np.zeros((len(varsIndexes),len(nodes),len(self.tags['cores'])),dtype=np.float64)
-    f.seek(self.tags['cores'][0])
-    for t in range(len(self.tags['cores'])):
-       f.seek(self.tags['cores'][t])
-       f.seek(4+fsize+4,1)
-       for ivar in range(self.NVAR):
-          f.seek(4,1)
-          if ivar in varsIndexes:
-             jnod = onodes[0]
-             f.seek(fsize*(jnod[1]-1),1)
-             z[varsIndexes.index(ivar),jnod[0],t] = unpack(endian+ftype,f.read(fsize))[0]
-             for inod in onodes[1:]:
-                f.seek(fsize*(inod[1]-jnod[1]-1),1)
-                z[varsIndexes.index(ivar),inod[0],t] = unpack(endian+ftype,f.read(fsize))[0]
-                jnod = inod
-             f.seek(fsize*self.NPOIN3-fsize*jnod[1],1)
-          else:
-             f.seek(fsize*self.NPOIN3,1)
-          f.seek(4,1)
-    return z
 
   def __del__(self):
     if self.file['name'] != '': self.file['hook'].close()
@@ -348,8 +346,9 @@ class SLF(object):
 
   @property
   def values(self):
+    
     if self._values is None:
-      values = np.zeros((self.NFRAME,self.NVAR,self.NPOIN3),np.float32)
+      values = np.zeros((self.NFRAME,self.NVAR,self.NPOIN3),self.dtype)
       if not self.empty:
         for t in range(self.NFRAME):
           values[t] = self.getVALUES(t)
@@ -373,27 +372,34 @@ class SLF(object):
     return len(self.tags['times'])
   
   @property
-  def trixy(self):
+  def dtype(self):
+    ftype,fsize = self.file['float']
+    dtype = np.float32
+    if (fsize == 8):dtype = np.float64
+    return dtype
+  
+  @property
+  def TRIXY(self):
     if self._trixy is None:
         x,y=(self.MESHX,self.MESHY)
-        z = np.zeros(x.size)
+        z = np.zeros(x.size,np.float64)
         indexes = self.IKLE2
         self._trixy = np.concatenate((x[indexes][...,np.newaxis],y[indexes][...,np.newaxis],z[indexes][...,np.newaxis]), axis=2)
     return self._trixy
   
   @property
-  def triarea(self):
+  def TRIAREA(self):
     if self._triarea is None:
-      trixy = self.trixy
+      trixy = self.TRIXY
       v0 = trixy[:,1,] - trixy[:,0,:]
       v1 = trixy[:,2,:] - trixy[:,0,:]
       self._triarea = 0.5* np.cross(v0,v1)[:,2]
     return self._triarea
 
   @property
-  def tricentroid(self):
+  def TRICENTROID(self):
     if self._tricentroid is None:
-      self._tricentroid = np.mean(self.trixy,axis=1)
+      self._tricentroid = np.mean(self.TRIXY,axis=1)
     return self._tricentroid
 
    # {STRING} title
@@ -412,7 +418,7 @@ class SLF(object):
   def addPOIN(self,points):
     self.IPOB2 = np.arange(len(points))
     self.IPOB3 = self.IPOB2
-    self.IPARAM = np.zeros(10)
+    self.IPARAM = np.zeros(10,np.int32)
     self.IPARAM[0] = 1
     self.NPOIN2 = len(points)
     self.NPOIN3 =self.NPOIN2
@@ -441,7 +447,6 @@ class SLF(object):
               
   # {String}
   def writeSLF(self,output):
-    if self.empty : self.createGrid()
     self.fole.update({ 'name': output })
     self.fole.update({ 'hook': open(output,'wb') })
     self.appendHeaderSLF()
@@ -461,7 +466,7 @@ class SLF(object):
     xlen = len(xPoints)
     ylen = len(yPoints)
     
-    xy = np.array([[x,y] for y in yPoints for x in xPoints],np.float32)
+    xy = np.array([[x,y] for y in yPoints for x in xPoints],np.float64)
     
     ikle = []
     for row in range(ylen-1):
@@ -478,6 +483,8 @@ class SLF(object):
     self.addPOIN(xy)
     self.addIKLE(ikle)
     self.tags['times']=np.arange(1)
+    self.values # get values
+    self.empty = False
     
   def printAtt(self):
     attr = {
@@ -488,3 +495,25 @@ class SLF(object):
       'EXTENT':self.EXTENT,
     }
     print(attr)
+    
+    
+  def printInfo(self,filename):
+    ftype,fsize = self.file['float']
+    # form = {'float':'{:12.6e}'.format} if (ftype=='f') else {'float':'{:20.14e}'.format}
+    # np.set_printoptions(threshold=np.nan,formatter=form)
+    np.set_printoptions(threshold=np.nan,suppress=True)
+    with open(filename, 'w') as f:
+      f.write("exports.NELEM3=%d;\n" % self.NELEM3)
+      f.write("exports.NPOIN3=%d;\n" % self.NPOIN3)
+      f.write("exports.NFRAME=%d;\n" % self.NFRAME)
+      f.write("exports.NFRAME10=%d;\n" % 10)
+      f.write("exports.MESHX=new Float32Array({});\n".format(np.array2string(self.MESHX.flatten(),separator=', ')))
+      f.write("exports.MESHY=new Float32Array({});\n".format(np.array2string(self.MESHY.flatten(),separator=', ')))
+      f.write("exports.TRIXY=new Float32Array({});\n".format(np.array2string(self.TRIXY.flatten(),separator=', ')))
+      f.write("exports.ELEMENTS=new Uint32Array({});\n".format(np.array2string(self.IKLE3.flatten(),separator=', ')))
+      f.write("exports.TRIAREA=new Float32Array({});\n".format(np.array2string(self.TRIAREA.flatten(),separator=', ')))
+      f.write("exports.CX=new Float32Array({});\n".format(np.array2string(self.TRICENTROID[:,0].flatten(),separator=', ')))
+      f.write("exports.CY=new Float32Array({});\n".format(np.array2string(self.TRICENTROID[:,1].flatten(),separator=', ')))
+      
+      frame10 = (np.arange(self.NPOIN3) / float(self.NPOIN3)) + 9
+      f.write("exports.FRAME10=new Float32Array({});\n".format(np.array2string(frame10.flatten(),separator=', ')))

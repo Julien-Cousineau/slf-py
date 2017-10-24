@@ -18,8 +18,7 @@ slf.writeSLF("demo1.slf") # Write new Selafin file
 
 
 filename = 'demo1.slf'
-slf=SLF(filename)         # Create new Selafin file with a square grid
-slf.writeSLF("demo2.slf") # Write new Selafin file
+slf=SLF(filename)         # Read Selafin file
 slf.printAtt()            # Print attributes
 ```
 
@@ -68,4 +67,4 @@ values = np.concatenate((original,rangec), axis=1)
 Empty
 
 ## License
-ios-py is an open source python library and licensed under [MIT](../master/LICENSE).
+slf-py is an open source python library and licensed under [MIT](../master/LICENSE).
