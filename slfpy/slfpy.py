@@ -48,14 +48,11 @@ class SLF(object):
        self.NBV2 = 0; self.CLDNAMES = []; self.CLDUNITS = []
        self.IKLE3 = []; self.IKLE2 = []; self.IPOB2 = []; self.IPOB3 = []; self.MESHX = []; self.MESHY = []
        self.tags = { 'cores':[],'times':[] }
-       self.createGrid()
+       self._createGrid()
     self.fole = {}
     self.fole.update({ 'name': '' })
     self.fole.update({ 'endian': self.file['endian'] })
     self.fole.update({ 'float': self.file['float'] })
-    self.tree = None
-    self.neighbours = None
-    self.edges = None
     self.alterZnames = []
 
   def getEndianFromChar(self,f,nchar):
@@ -67,8 +64,8 @@ class SLF(object):
       f.seek(pointer)
       l,c,chk = unpack(endian+'i'+str(nchar)+'si',f.read(4+nchar+4))
     if l!=chk:
-      print '... Cannot read '+str(nchar)+' characters from your binary file'
-      print '     +> Maybe it is the wrong file format ?'
+      print('... Cannot read '+str(nchar)+' characters from your binary file')
+      print('     +> Maybe it is the wrong file format ?')
       sys.exit(1)
     f.seek(pointer)
     return endian
@@ -84,8 +81,8 @@ class SLF(object):
     r = unpack(endian+str(nfloat)+cfloat,f.read(ifloat*nfloat))
     chk = unpack(endian+'i',f.read(4))
     if l!=chk:
-      print '... Cannot read '+str(nfloat)+' floats from your binary file'
-      print '     +> Maybe it is the wrong file format ?'
+      print('... Cannot read '+str(nfloat)+' floats from your binary file')
+      print('     +> Maybe it is the wrong file format ?')
       sys.exit(1)
     f.seek(pointer)
     return cfloat,ifloat
@@ -98,6 +95,7 @@ class SLF(object):
     endian = self.file['endian']
     # ~~ Read title ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     l,self.TITLE,chk = unpack(endian+'i80si',f.read(4+80+4))
+    self.TITLE = str(self.TITLE)
     # ~~ Read NBV(1) and NBV(2) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     l,self.NBV1,self.NBV2,chk = unpack(endian+'iiii',f.read(4+8+4))
     self.NVAR = self.NBV1 + self.NBV2
@@ -106,18 +104,22 @@ class SLF(object):
     self.VARNAMES = []; self.VARUNITS = []
     for _ in range(self.NBV1):
        l,vn,vu,chk = unpack(endian+'i16s16si',f.read(4+16+16+4))
+       vn = str(vn)
+       vu = str(vu)
        self.VARNAMES.append(vn)
        self.VARUNITS.append(vu)
     self.CLDNAMES = []; self.CLDUNITS = []
     for _ in range(self.NBV2):
        l,vn,vu,chk = unpack(endian+'i16s16si',f.read(4+16+16+4))
+       vn = str(vn)
+       vu = str(vu)
        self.CLDNAMES.append(vn)
        self.CLDUNITS.append(vu)
     # ~~ Read IPARAM array ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     d = unpack(endian+'12i',f.read(4+40+4))
     self.IPARAM = np.asarray( d[1:11] )
     # ~~ Read DATE/TIME array ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    self.DATETIME = [1972,07,13,17,15,13]
+    self.DATETIME = [1972,7,13,17,15,13]
     if self.IPARAM[9] == 1:
        d = unpack(endian+'8i',f.read(4+24+4))
        self.DATETIME = np.asarray( d[1:9] )
@@ -256,19 +258,20 @@ class SLF(object):
     endian = self.fole['endian']
     ftype,fsize = self.fole['float']
     # ~~ Write title ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    f.write(pack(endian+'i80si',80,self.TITLE,80))
+    
+    f.write(pack(endian+'i80si',80,self.TITLE.encode(),80))
    # ~~ Write NBV(1) and NBV(2) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     f.write(pack(endian+'iiii',4+4,self.NBV1,self.NBV2,4+4))
     # ~~ Write variable names and units ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     for i in range(self.NBV1):
        f.write(pack(endian+'i',32))
-       f.write(pack(endian+'16s',self.VARNAMES[i]))
-       f.write(pack(endian+'16s',self.VARUNITS[i]))
+       f.write(pack(endian+'16s',self.VARNAMES[i].encode()))
+       f.write(pack(endian+'16s',self.VARUNITS[i].encode()))
        f.write(pack(endian+'i',32))
     for i in range(self.NBV2):
        f.write(pack(endian+'i',32))
-       f.write(pack(endian+'16s',self.CLDNAMES[i]))
-       f.write(pack(endian+'16s',self.CLDUNITS[i]))
+       f.write(pack(endian+'16s',self.CLDNAMES[i].encode()))
+       f.write(pack(endian+'16s',self.CLDUNITS[i].encode()))
        f.write(pack(endian+'i',32))
     # ~~ Write IPARAM array ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     f.write(pack(endian+'i',4*10))
@@ -352,6 +355,7 @@ class SLF(object):
       if not self.empty:
         for t in range(self.NFRAME):
           values[t] = self.getVALUES(t)
+      self.empty = False
       self._values = values
     return self._values
       
@@ -369,6 +373,7 @@ class SLF(object):
     
   @property
   def NFRAME(self):
+    if len(self.tags['times'])==0:self.tags['times']=np.arange(1)
     return len(self.tags['times'])
   
   @property
@@ -401,6 +406,9 @@ class SLF(object):
     if self._tricentroid is None:
       self._tricentroid = np.mean(self.TRIXY,axis=1)
     return self._tricentroid
+  
+  
+
 
    # {STRING} title
   def addTITLE(self,title):
@@ -438,15 +446,20 @@ class SLF(object):
   # {OBJECT (name:str,unit:str)} var
   # {2D Array}
   # {2D Array(NELEM,3}
-  def addMesh(self,title,var,points,ikle):
+  def addMesh(self,points,ikle,**kwargs):
+      title=kwargs.get("title","Mesh")
+      var =kwargs.get("var",{"name":"BOTTOM","unit":"m"})
+      values =kwargs.get("values",None)
       self.empty = False
       self.addTITLE(title)
       self.addVAR(var)
       self.addPOIN(points)
       self.addIKLE(ikle)
-              
+      if values is not None:
+        self.values=values
+      return self
   # {String}
-  def writeSLF(self,output):
+  def write(self,output):
     self.fole.update({ 'name': output })
     self.fole.update({ 'hook': open(output,'wb') })
     self.appendHeaderSLF()
@@ -456,10 +469,8 @@ class SLF(object):
         self.appendCoreTimeSLF(t)
         self.appendCoreVarsSLF(self.values[t])
     self.fole['hook'].close()
-
-  # {String}
-  # {Float x6}
-  def createGrid(self,title="Grid",xstart=-1,xend=1,xstep=0.1,ystart=-1,yend=1,ystep=0.1):
+  @staticmethod
+  def createGrid(title="Grid",xstart=-1,xend=1,xstep=0.1,ystart=-1,yend=1,ystep=0.1):
     xPoints = np.arange(xstart,xend+xstep,xstep)
     yPoints = np.arange(ystart,yend+ystep,ystep)
     
@@ -477,11 +488,15 @@ class SLF(object):
         n4 = (col+1)+(row+1)*(ylen)
         ikle.append([n1,n3,n2])
         ikle.append([n2,n3,n4])
-    ikle =  np.array(ikle)
-    self.addTITLE(title)
+    ikle =  np.array(ikle)  
+    return {"title":title,"xy":xy,"ikle":ikle}
+  
+  def _createGrid(self,*args,**kwargs):
+    obj=SLF.createGrid()
+    self.addTITLE(obj['title'])
     self.addVAR({'name':'BOTTOM','unit':'m'})
-    self.addPOIN(xy)
-    self.addIKLE(ikle)
+    self.addPOIN(obj['xy'])
+    self.addIKLE(obj['ikle'])
     self.tags['times']=np.arange(1)
     self.values # get values
     self.empty = False
@@ -501,7 +516,7 @@ class SLF(object):
     ftype,fsize = self.file['float']
     # form = {'float':'{:12.6e}'.format} if (ftype=='f') else {'float':'{:20.14e}'.format}
     # np.set_printoptions(threshold=np.nan,formatter=form)
-    np.set_printoptions(threshold=np.nan,suppress=True)
+    # np.set_printoptions(threshold=np.nan,suppress=True)
     with open(filename, 'w') as f:
       f.write("exports.NELEM3=%d;\n" % self.NELEM3)
       f.write("exports.NPOIN3=%d;\n" % self.NPOIN3)

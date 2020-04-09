@@ -1,5 +1,5 @@
 import numpy as np
-from slf import SLF
+from slfpy import SLF
 
 # Example 1
 slf=SLF()                 # Create new Selafin file with a square grid
