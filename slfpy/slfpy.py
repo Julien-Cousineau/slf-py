@@ -2,6 +2,8 @@
 import os,sys
 import numpy as np
 from struct import unpack,pack
+from matplotlib.tri import Triangulation
+import matplotlib.pyplot as plt
 
 class SLF(object):
   def __init__(self,filePath=''):
@@ -10,7 +12,8 @@ class SLF(object):
     self._trixy = None
     self._triarea = None
     self._tricentroid = None
-    self._values = None     
+    self._values = None
+    self._kdtree = None
     
     self.initialized(filePath)
 
@@ -48,7 +51,7 @@ class SLF(object):
        self.NBV2 = 0; self.CLDNAMES = []; self.CLDUNITS = []
        self.IKLE3 = []; self.IKLE2 = []; self.IPOB2 = []; self.IPOB3 = []; self.MESHX = []; self.MESHY = []
        self.tags = { 'cores':[],'times':[] }
-       self._createGrid()
+      # self._createGrid()
     self.fole = {}
     self.fole.update({ 'name': '' })
     self.fole.update({ 'endian': self.file['endian'] })
@@ -95,7 +98,7 @@ class SLF(object):
     endian = self.file['endian']
     # ~~ Read title ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     l,self.TITLE,chk = unpack(endian+'i80si',f.read(4+80+4))
-    self.TITLE = str(self.TITLE)
+    self.TITLE = self.TITLE.decode('ascii').strip()
     # ~~ Read NBV(1) and NBV(2) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     l,self.NBV1,self.NBV2,chk = unpack(endian+'iiii',f.read(4+8+4))
     self.NVAR = self.NBV1 + self.NBV2
@@ -104,8 +107,8 @@ class SLF(object):
     self.VARNAMES = []; self.VARUNITS = []
     for _ in range(self.NBV1):
        l,vn,vu,chk = unpack(endian+'i16s16si',f.read(4+16+16+4))
-       vn = str(vn)
-       vu = str(vu)
+       vn = vn.decode('ascii').strip()
+       vu = vu.decode('ascii').strip()
        self.VARNAMES.append(vn)
        self.VARUNITS.append(vu)
     self.CLDNAMES = []; self.CLDUNITS = []
@@ -122,27 +125,31 @@ class SLF(object):
     self.DATETIME = [1972,7,13,17,15,13]
     if self.IPARAM[9] == 1:
        d = unpack(endian+'8i',f.read(4+24+4))
-       self.DATETIME = np.asarray( d[1:9] )
+       print(d)
+       self.DATETIME = np.asarray( d[1:7] )
+       
 
   def getHeaderIntegersSLF(self):
     f = self.file['hook']
     endian = self.file['endian']
     # ~~ Read NELEM3, NPOIN3, NDP3, NPLAN ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     l,self.NELEM3,self.NPOIN3,self.NDP3,self.NPLAN,chk = unpack(endian+'6i',f.read(4+16+4))
+    
     self.NELEM2 = self.NELEM3
     self.NPOIN2 = self.NPOIN3
     self.NDP2 = self.NDP3
     self.NPLAN = max( 1,self.NPLAN )
     if self.IPARAM[6] > 1:
        self.NPLAN = self.IPARAM[6] # /!\ How strange is that ?
-       self.NELEM2 = self.NELEM3 / ( self.NPLAN - 1 )
-       self.NPOIN2 = self.NPOIN3 / self.NPLAN
-       self.NDP2 = self.NDP3 / 2
+       self.NELEM2 = int(self.NELEM3 / ( self.NPLAN - 1 ))
+       self.NPOIN2 = int(self.NPOIN3 / self.NPLAN)
+       self.NDP2 = int(self.NDP3 / 2)
     # ~~ Read the IKLE array ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     f.seek(4,1)
     self.IKLE3 = np.array( unpack(endian+str(self.NELEM3*self.NDP3)+'i',f.read(4*self.NELEM3*self.NDP3)) ) - 1
     f.seek(4,1)
     self.IKLE3 = self.IKLE3.reshape((self.NELEM3,self.NDP3))
+    # print(self.NELEM2)
     if self.NPLAN > 1: self.IKLE2 = np.compress( np.repeat([True,False],self.NDP2), self.IKLE3[0:self.NELEM2], axis=1 )
     else: self.IKLE2 = self.IKLE3
     # ~~ Read the IPOBO array ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -163,6 +170,47 @@ class SLF(object):
     f.seek(4,1)
     self.MESHY = np.asarray( unpack(endian+str(self.NPOIN3)+ftype,f.read(fsize*self.NPOIN3))[0:self.NPOIN2],np.float64)
     f.seek(4,1)
+
+  def dt2cal(self,dt):
+    """
+    Convert array of datetime64 to a calendar array of year, month, day, hour,
+    minute, seconds, microsecond with these quantites indexed on the last axis.
+
+    Parameters
+    ----------
+    dt : datetime64 array (...)
+        numpy.ndarray of datetimes of arbitrary shape
+
+    Returns
+    -------
+    cal : uint32 array (..., 7)
+        calendar array with last axis representing year, month, day, hour,
+        minute, second, microsecond
+    """
+  
+    # allocate output
+    out = np.empty(dt.shape + (7,), dtype="u4")
+    # decompose calendar floors
+    Y, M, D, h, m, s = [dt.astype("M8[{0}]".format(x)) for x in "YMDhms"]
+    out[..., 0] = Y + 1970  # Gregorian Year
+    out[..., 1] = (M - Y) + 1  # month
+    out[..., 2] = (D - M) + 1  # dat
+    out[..., 3] = (dt - D).astype("m8[h]")  # hour
+    out[..., 4] = (dt - h).astype("m8[m]")  # minute
+    out[..., 5] = (dt - m).astype("m8[s]")  # second
+    out[..., 6] = (dt - s).astype("m8[us]")  # microsecond
+    return out
+  
+  def setDatetime(self,value):
+    self.DATETIME = self.dt2cal(value)[:6]
+    self.IPARAM[9] = 1
+  
+  def getDatetime(self):
+    print(self.DATETIME)
+    [y,M,d,h,m,s]=self.DATETIME
+    return np.datetime64('{0:04d}-{1:02d}-{2:02d}T{3:02d}:{4:02d}:{5:02d}'.format(y,M,d,h,m,s)) + self.tags['times'].astype('timedelta64[s]')
+  
+    
 
   def getTimeHistorySLF(self):
     f = self.file['hook']
@@ -210,6 +258,23 @@ class SLF(object):
        for iv in range(len(self.CLDNAMES)):
           if v.lower() in self.CLDNAMES[iv].lower(): VARSOR[iv+self.NBV1] = self.alterZm * VARSOR[iv+self.NBV1] + self.alterZp
     return VARSOR
+
+  @property
+  def XY(self):
+    return np.column_stack((self.MESHX,self.MESHY))
+
+  @property
+  def kdtree(self):
+    import time
+    from scipy import spatial
+    if self._kdtree is None:
+      self._kdtree = spatial.KDTree(self.XY)
+      
+    return self._kdtree
+    
+  def closestIndexes(self,pts):
+    return self.kdtree.query(pts)[1]
+
   
   def getSERIES( self,nodes,varsIndexes=[]):
     f = self.file['hook']
@@ -218,7 +283,8 @@ class SLF(object):
     if varsIndexes == []: varsIndexes = self.VARINDEX
     # ~~ Ordering the nodes ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # This assumes that nodes starts at 1
-    onodes = np.sort(np.array( zip(range(len(nodes)),nodes), dtype=[ ('0',int),('1',int) ] ),order='1')
+    onodes=np.sort(np.array(list(zip(range(len(nodes)), nodes)), dtype=[('0', int), ('1', int)]), order='1')
+    # onodes = np.sort(np.array( zip(range(len(nodes)),nodes), dtype=[ ('0',int),('1',int) ] ),order='1')
     # ~~ Extract time profiles ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     z = np.zeros((len(varsIndexes),len(nodes),len(self.tags['cores'])),self.dtype)
     f.seek(self.tags['cores'][0])
@@ -258,7 +324,7 @@ class SLF(object):
     endian = self.fole['endian']
     ftype,fsize = self.fole['float']
     # ~~ Write title ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    
+    # print(self.VARNAMES)
     f.write(pack(endian+'i80si',80,self.TITLE.encode(),80))
    # ~~ Write NBV(1) and NBV(2) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     f.write(pack(endian+'iiii',4+4,self.NBV1,self.NBV2,4+4))
@@ -275,6 +341,7 @@ class SLF(object):
        f.write(pack(endian+'i',32))
     # ~~ Write IPARAM array ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     f.write(pack(endian+'i',4*10))
+    # print(self.IPARAM)
     for i in range(len(self.IPARAM)): f.write(pack(endian+'i',self.IPARAM[i]))
     f.write(pack(endian+'i',4*10))
     # ~~ Write DATE/TIME array ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -286,10 +353,12 @@ class SLF(object):
     f.write(pack(endian+'6i',4*4,self.NELEM3,self.NPOIN3,self.NDP3,1,4*4))  #/!\ where is NPLAN ?
     # ~~ Write the IKLE array ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     f.write(pack(endian+'i',4*self.NELEM3*self.NDP3))
+    # print(self.IKLE3.ravel())
     f.write(pack(endian+str(self.NELEM3*self.NDP3)+'i',*(self.IKLE3.ravel()+1)))
     f.write(pack(endian+'i',4*self.NELEM3*self.NDP3))
     # ~~ Write the IPOBO array ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     f.write(pack(endian+'i',4*self.NPOIN3))
+    
     f.write(pack(endian+str(self.NPOIN3)+'i',*(self.IPOB3)))
     f.write(pack(endian+'i',4*self.NPOIN3))
     # ~~ Write the x-coordinates of the nodes ~~~~~~~~~~~~~~~~~~~~~~~
@@ -310,6 +379,7 @@ class SLF(object):
     # Print time record
     if type(t) == type(0.0): f.write(pack(endian+'i'+ftype+'i',fsize,t,fsize))
     else: f.write(pack(endian+'i'+ftype+'i',fsize,self.tags['times'][t],fsize))
+    # print(self.tags['times'][t])
 
   def appendCoreVarsSLF( self,VARSOR ):
     f = self.fole['hook']
@@ -335,6 +405,9 @@ class SLF(object):
 
   def __del__(self):
     if self.file['name'] != '': self.file['hook'].close()
+
+  def getVarsIndexes(self,names):
+    return list(np.where(np.char.strip(np.asarray(self.VARNAMES)) == np.asarray(names)[:, np.newaxis])[1])
 
   @property
   def filePath(self):
@@ -407,9 +480,6 @@ class SLF(object):
       self._tricentroid = np.mean(self.TRIXY,axis=1)
     return self._tricentroid
   
-  
-
-
    # {STRING} title
   def addTITLE(self,title):
     self.TITLE = '{: <{}}'.format(title, 80)
@@ -421,10 +491,14 @@ class SLF(object):
     self.VARINDEX = range(self.NVAR)
     self.VARNAMES.append('{: <{}}'.format(var['name'], 16)); 
     self.VARUNITS.append('{: <{}}'.format(var['unit'], 16));
+  
+  def addVARS(self, vars):
+    for var in vars:
+      self.addVAR(var)
     
   # {2D Array}
   def addPOIN(self,points):
-    self.IPOB2 = np.arange(len(points))
+    self.IPOB2 = np.arange(len(points),dtype="i4")
     self.IPOB3 = self.IPOB2
     self.IPARAM = np.zeros(10,np.int32)
     self.IPARAM[0] = 1
@@ -439,8 +513,8 @@ class SLF(object):
     self.NDP3 = 3
     self.NELEM2 = len(ikle)
     self.NELEM3 = self.NELEM2
-    self.IKLE2 = ikle
-    self.IKLE3 = ikle      
+    self.IKLE2 = ikle.astype("int")
+    self.IKLE3 = ikle.astype("int")      
    
   # {STRING} title
   # {OBJECT (name:str,unit:str)} var
@@ -450,14 +524,44 @@ class SLF(object):
       title=kwargs.get("title","Mesh")
       var =kwargs.get("var",{"name":"BOTTOM","unit":"m"})
       values =kwargs.get("values",None)
+      ipobo =kwargs.get("ipobo",None)
       self.empty = False
       self.addTITLE(title)
-      self.addVAR(var)
+      if isinstance(var,list):
+        for v in var: self.addVAR(v)
+      else:self.addVAR(var)
       self.addPOIN(points)
       self.addIKLE(ikle)
       if values is not None:
         self.values=values
+      else:
+        self.values = np.zeros((self.NFRAME,self.NVAR,self.NPOIN3),self.dtype)
+      
+      if ipobo is not None:
+        self.IPOB3=ipobo
+      # else:
+      #   self.IPOB3=np.zeros(self.NPOIN2)
+      
       return self
+      
+    # {String}
+  def writeSLFperFrame(self, output,func):
+    self.fole.update({'name': output})
+    self.fole.update({'hook': open(output, 'wb')})
+    self.appendHeaderSLF()
+    func(self)
+    self.fole['hook'].close()
+
+    # {String}
+  def writeHeader(self, output):
+      self.fole.update({'name': output})
+      self.fole.update({'hook': open(output, 'wb')})
+      self.appendHeaderSLF()
+  
+  def writeFrame(self,time,frame):
+    self.appendCoreTimeSLF(time)
+    self.appendCoreVarsSLF(frame)
+      
   # {String}
   def write(self,output):
     self.fole.update({ 'name': output })
@@ -469,8 +573,39 @@ class SLF(object):
         self.appendCoreTimeSLF(t)
         self.appendCoreVarsSLF(self.values[t])
     self.fole['hook'].close()
+  
+  
   @staticmethod
-  def createGrid(title="Grid",xstart=-1,xend=1,xstep=0.1,ystart=-1,yend=1,ystep=0.1):
+  def createGrid(xstart=-1,xend=1,xstep=0.1,ystart=-1,yend=1,ystep=0.1):
+    xPoints = np.arange(xstart,xend+xstep,xstep)
+    yPoints = np.arange(ystart,yend+ystep,ystep)
+    
+    xlen = len(xPoints)
+    ylen = len(yPoints)
+  
+    x, y = np.meshgrid(xPoints, yPoints)
+    x=x.ravel()
+    y=y.ravel()
+    elem = []
+    for row in range(ylen-1):
+      for col in range(xlen-1):
+        n1 = col+row*(xlen)
+        n2 = (col+1)+row*(xlen)
+        n3 = col+(row+1)*(xlen)
+        n4 = (col+1)+(row+1)*(xlen)
+        elem.append([n1,n3,n2])
+        elem.append([n2,n3,n4])
+    elem =  np.array(elem)  
+    return {"x":x,"y":y,"elem":elem}
+  
+  @staticmethod
+  def plotGrid(x,y,elem,filePath):
+    tri = Triangulation(x, y, elem.astype("int32"))
+    plt.triplot(tri)
+    plt.savefig(filePath)
+    
+  @staticmethod
+  def createGridOld(title="Grid",xstart=-1,xend=1,xstep=0.1,ystart=-1,yend=1,ystep=0.1):
     xPoints = np.arange(xstart,xend+xstep,xstep)
     yPoints = np.arange(ystart,yend+ystep,ystep)
     
@@ -492,7 +627,7 @@ class SLF(object):
     return {"title":title,"xy":xy,"ikle":ikle}
   
   def _createGrid(self,*args,**kwargs):
-    obj=SLF.createGrid()
+    obj=SLF.createGridOld()
     self.addTITLE(obj['title'])
     self.addVAR({'name':'BOTTOM','unit':'m'})
     self.addPOIN(obj['xy'])
@@ -510,6 +645,8 @@ class SLF(object):
       'EXTENT':self.EXTENT,
     }
     print(attr)
+    print(self.VARNAMES)
+    
     
     
   def printInfo(self,filename):
